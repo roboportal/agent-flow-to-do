@@ -90,6 +90,12 @@ jobs:
 
           REVIEWERS=$(cd .github/agent && npx tsx parse-config.ts --list reviewers | paste -sd, -)
 
+          # Discard any changes Claude (or a scaffolder like `rails new`) made under .github/.
+          # The default GITHUB_TOKEN cannot push workflow files, and we don't want the agent
+          # modifying its own configuration. Restore tracked files and delete untracked ones.
+          git checkout HEAD -- .github/ 2>/dev/null || true
+          git clean -fd .github/
+
           git config user.name "agent-flow[bot]"
           git config user.email "agent-flow[bot]@users.noreply.github.com"
           git checkout -b "$BRANCH"
