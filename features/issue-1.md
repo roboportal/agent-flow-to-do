@@ -71,22 +71,7 @@ The application will follow Rails conventions throughout, making it maintainable
 |------|-------------|
 | `docker-compose.yml` | Docker Compose configuration for Rails app and PostgreSQL services |
 | `Dockerfile` | Rails application Docker image configuration |
-| `Gemfile` | Add Rails, PostgreSQL (pg gem), and development dependencies |
-| `config/database.yml` | Configure PostgreSQL for containerized environment |
-| `config/routes.rb` | Define RESTful routes for todos and set root route |
-| `db/migrate/xxx_create_todos.rb` | Database migration to create todos table with proper PostgreSQL types |
-| `app/models/todo.rb` | Todo model with Active Record validations |
-| `app/controllers/application_controller.rb` | Base controller setup |
-| `app/controllers/todos_controller.rb` | Controller with all CRUD actions using Active Record |
-| `app/views/layouts/application.html.erb` | Update layout for basic styling and navigation |
-| `app/views/todos/index.html.erb` | List all todos with action links |
-| `app/views/todos/show.html.erb` | Display individual todo details |
-| `app/views/todos/new.html.erb` | Form for creating new todos |
-| `app/views/todos/edit.html.erb` | Form for editing existing todos |
-| `app/views/todos/_form.html.erb` | Shared form partial for new/edit views |
-| `db/seeds.rb` | Sample data for development |
-| `README.md` | Docker-based setup instructions and development guide |
-| `config/application.rb` | Rails application configuration |
+| `README.md` | Update to include Docker-based setup instructions |
 | `.dockerignore` | Docker ignore file for build optimization |
 
 ## Open Questions
