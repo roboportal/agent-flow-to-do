@@ -23,166 +23,52 @@ jobs:
         with:
           ref: main
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
+      - name: Setup agent
+        id: setup
+        uses: ./.github/actions/setup-agent
 
-      - name: Install agent dependencies
-        run: npm install
-        working-directory: .github/agent
-
-      - name: Load config
-        id: config
-        run: |
-          npx tsx parse-config.ts model stack >> "$GITHUB_OUTPUT"
-        working-directory: .github/agent
-
-      - name: Extract spec context
+      - name: Extract spec metadata and build prompt
         id: spec
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STACK: ${{ steps.setup.outputs.stack }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}
           SPEC_BRANCH: ${{ github.event.pull_request.head.ref }}
         run: |
-          # Extract issue number from branch name (spec/issue-123)
           ISSUE_NUMBER=$(echo "$SPEC_BRANCH" | grep -oP 'issue-\K\d+' || echo "$PR_NUMBER")
-          echo "issue_number=$ISSUE_NUMBER" >> "$GITHUB_OUTPUT"
-
           SPEC_FILE="features/issue-${ISSUE_NUMBER}.md"
-          echo "spec_file=$SPEC_FILE" >> "$GITHUB_OUTPUT"
 
-          # Read the merged spec
           if [ ! -f "$SPEC_FILE" ]; then
             echo "Error: $SPEC_FILE not found after merge"
             exit 1
           fi
-          SPEC_CONTENT=$(cat "$SPEC_FILE")
 
-          # Extract source issue number from PR body
           SOURCE_ISSUE=$(echo "$PR_BODY" | grep -oP 'Source issue: #\K\d+' || echo "")
-          echo "source_issue=$SOURCE_ISSUE" >> "$GITHUB_OUTPUT"
-
-          # Clean title (remove [SPEC] prefix)
           CLEAN_TITLE=$(echo "$PR_TITLE" | sed 's/^\[SPEC\][[:space:]]*//')
+
+          echo "issue_number=$ISSUE_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "source_issue=$SOURCE_ISSUE" >> "$GITHUB_OUTPUT"
           echo "title=$CLEAN_TITLE" >> "$GITHUB_OUTPUT"
 
-          # Save spec for Claude
-          echo "$SPEC_CONTENT" > /tmp/spec.md
+          {
+            cat .github/agent/implement-prompt.md
+            echo
+            echo "## Tech Stack"
+            echo "$STACK"
+            echo
+            echo "## Task"
+            echo "The approved specification is at \`${SPEC_FILE}\`. Read it first, then implement it."
+          } > /tmp/claude_prompt.md
 
-          # Extract keywords from spec
-          KEYWORDS=$(echo "$SPEC_CONTENT" | tr '[:upper:]' '[:lower:]' | tr -cs '[:alnum:]' '\n' | sort -u | grep -v '^.\{0,2\}$' | head -20 | tr '\n' ' ')
-          echo "keywords=$KEYWORDS" >> "$GITHUB_OUTPUT"
-
-      - name: Build repository context
-        run: |
-          npx tsx build-context.ts ${{ steps.spec.outputs.keywords }} > /tmp/repo_context.md
-        working-directory: .github/agent
-
-      - name: Call Claude API
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: |
-          SYSTEM_PROMPT=$(cat .github/agent/implement-prompt.md)
-          SPEC_CONTENT=$(cat /tmp/spec.md)
-          REPO_CONTEXT=$(cat /tmp/repo_context.md)
-          STACK="${{ steps.config.outputs.stack }}"
-          MODEL="${{ steps.config.outputs.model }}"
-
-          USER_MESSAGE="## Tech Stack
-          ${STACK}
-
-          ## Approved Specification
-          ${SPEC_CONTENT}
-
-          ## Repository Context (Existing Files)
-          ${REPO_CONTEXT}
-
-          Please implement the changes described in the specification above."
-
-          PAYLOAD=$(jq -n \
-            --arg model "$MODEL" \
-            --arg system "$SYSTEM_PROMPT" \
-            --arg user "$USER_MESSAGE" \
-            '{
-              model: $model,
-              max_tokens: 16384,
-              system: $system,
-              messages: [{ role: "user", content: $user }]
-            }')
-
-          RESPONSE=$(curl -s -X POST "https://api.anthropic.com/v1/messages" \
-            -H "Content-Type: application/json" \
-            -H "x-api-key: $ANTHROPIC_API_KEY" \
-            -H "anthropic-version: 2023-06-01" \
-            -d "$PAYLOAD")
-
-          IMPL_CONTENT=$(echo "$RESPONSE" | jq -r '.content[0].text // empty')
-
-          if [ -z "$IMPL_CONTENT" ]; then
-            echo "Error: Claude API returned no content"
-            echo "$RESPONSE" | jq .
-            exit 1
-          fi
-
-          echo "$IMPL_CONTENT" > /tmp/implementation.md
-
-      - name: Apply implementation
-        run: |
-          IMPL=$(cat /tmp/implementation.md)
-
-          # Parse ===FILE: path=== blocks and write files
-          current_file=""
-          file_content=""
-          files_created=""
-
-          while IFS= read -r line; do
-            if echo "$line" | grep -qP '^===FILE:\s+(.+)===$'; then
-              # If we were writing a previous file, save it
-              if [ -n "$current_file" ]; then
-                mkdir -p "$(dirname "$current_file")"
-                printf '%s' "$file_content" > "$current_file"
-                files_created="${files_created}${current_file}\n"
-              fi
-              # Start new file
-              current_file=$(echo "$line" | sed 's/^===FILE:[[:space:]]*//' | sed 's/[[:space:]]*===$//')
-              file_content=""
-            elif echo "$line" | grep -q '^===END FILE===$'; then
-              # Save current file
-              if [ -n "$current_file" ]; then
-                mkdir -p "$(dirname "$current_file")"
-                printf '%s' "$file_content" > "$current_file"
-                files_created="${files_created}${current_file}\n"
-              fi
-              current_file=""
-              file_content=""
-            elif [ -n "$current_file" ]; then
-              if [ -z "$file_content" ]; then
-                file_content="$line"
-              else
-                file_content="${file_content}
-          ${line}"
-              fi
-            fi
-          done <<< "$IMPL"
-
-          # Handle case where last file has no END marker
-          if [ -n "$current_file" ]; then
-            mkdir -p "$(dirname "$current_file")"
-            printf '%s' "$file_content" > "$current_file"
-            files_created="${files_created}${current_file}\n"
-          fi
-
-          echo -e "Files created/modified:\n${files_created}"
-
-          # Check if any files were created
-          if [ -z "$files_created" ]; then
-            echo "Warning: No files were parsed from implementation output."
-            echo "Raw output saved to /tmp/implementation.md"
-            cp /tmp/implementation.md IMPLEMENTATION_OUTPUT.md
-          fi
+      - name: Run Claude Code
+        uses: anthropics/claude-code-base-action@beta
+        with:
+          prompt_file: /tmp/claude_prompt.md
+          allowed_tools: "Read,Write,Edit,MultiEdit,Glob,Grep,Bash"
+          model: ${{ steps.setup.outputs.model }}
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          max_turns: "60"
 
       - name: Create implementation PR
         env:
@@ -193,15 +79,18 @@ jobs:
           SPEC_PR: ${{ github.event.pull_request.number }}
         run: |
           BRANCH="implement/issue-${ISSUE_NUMBER}"
-
-          # Read reviewers from config
           REVIEWERS=$(cd .github/agent && npx tsx parse-config.ts --list reviewers | paste -sd, -)
 
           git config user.name "agent-flow[bot]"
           git config user.email "agent-flow[bot]@users.noreply.github.com"
-
           git checkout -b "$BRANCH"
           git add -A
+
+          if git diff --cached --quiet; then
+            echo "Error: Claude did not produce any file changes"
+            exit 1
+          fi
+
           git commit -m "Implement: ${TITLE}
 
           Based on spec from PR #${SPEC_PR}
@@ -228,14 +117,7 @@ jobs:
 
           ${ISSUE_REF}"
 
-          PR_ARGS=(
-            --title "[IMPL] ${TITLE}"
-            --body "$PR_BODY"
-            --head "$BRANCH"
-            --base "main"
-            --draft
-          )
-
+          PR_ARGS=(--title "[IMPL] ${TITLE}" --body "$PR_BODY" --head "$BRANCH" --base "main" --draft)
           if [ -n "$REVIEWERS" ]; then
             PR_ARGS+=(--reviewer "$REVIEWERS")
           fi
@@ -243,7 +125,6 @@ jobs:
           PR_URL=$(gh pr create "${PR_ARGS[@]}")
           echo "Created draft PR: $PR_URL"
 
-          # Comment on source issue
           if [ -n "$SOURCE_ISSUE" ]; then
             gh issue comment "$SOURCE_ISSUE" \
               --body "Implementation draft PR created: ${PR_URL}

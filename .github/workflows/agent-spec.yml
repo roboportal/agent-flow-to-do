@@ -20,152 +20,91 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-
-      - name: Install agent dependencies
-        run: npm install
-        working-directory: .github/agent
+      - name: Setup agent
+        id: setup
+        uses: ./.github/actions/setup-agent
 
       - name: Check authorization
         id: auth
+        working-directory: .github/agent
         env:
           COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
-        run: |
-          npx tsx parse-config.ts --check-user "$COMMENT_AUTHOR" >> "$GITHUB_OUTPUT"
-        working-directory: .github/agent
+        run: npx tsx parse-config.ts --check-user "$COMMENT_AUTHOR" >> "$GITHUB_OUTPUT"
 
-      - name: Add eyes reaction
+      - name: Acknowledge and build prompt
         if: steps.auth.outputs.authorized == 'true'
+        id: prepare
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          STACK: ${{ steps.setup.outputs.stack }}
         run: |
           gh api repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions \
             -f content=eyes
 
-      - name: Load config
-        if: steps.auth.outputs.authorized == 'true'
-        id: config
-        run: |
-          npx tsx parse-config.ts model stack >> "$GITHUB_OUTPUT"
-        working-directory: .github/agent
-
-      - name: Gather issue context
-        if: steps.auth.outputs.authorized == 'true'
-        id: issue
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
-        run: |
-          # Fetch issue details
           ISSUE_JSON=$(gh api repos/${{ github.repository }}/issues/$ISSUE_NUMBER)
           ISSUE_TITLE=$(echo "$ISSUE_JSON" | jq -r '.title')
           ISSUE_BODY=$(echo "$ISSUE_JSON" | jq -r '.body // ""')
+          COMMENTS=$(gh api repos/${{ github.repository }}/issues/$ISSUE_NUMBER/comments --paginate \
+            | jq -r '.[] | "**\(.user.login)** commented:\n\(.body)\n---"')
 
-          # Fetch all comments
-          COMMENTS_JSON=$(gh api repos/${{ github.repository }}/issues/$ISSUE_NUMBER/comments --paginate)
-          COMMENTS=$(echo "$COMMENTS_JSON" | jq -r '.[] | "**\(.user.login)** commented:\n\(.body)\n---"')
+          {
+            echo "title<<ISSUE_TITLE_EOF"
+            echo "$ISSUE_TITLE"
+            echo "ISSUE_TITLE_EOF"
+          } >> "$GITHUB_OUTPUT"
 
-          # Build full discussion context
-          CONTEXT="# Issue #${ISSUE_NUMBER}: ${ISSUE_TITLE}
+          mkdir -p features
+          SPEC_FILE="features/issue-${ISSUE_NUMBER}.md"
 
-          ## Issue Description
-          ${ISSUE_BODY}
+          {
+            cat .github/agent/spec-prompt.md
+            echo
+            echo "## Tech Stack"
+            echo "$STACK"
+            echo
+            echo "## Issue #${ISSUE_NUMBER}: ${ISSUE_TITLE}"
+            echo
+            echo "### Description"
+            echo "$ISSUE_BODY"
+            echo
+            echo "### Discussion"
+            echo "$COMMENTS"
+            echo
+            echo "## Task"
+            echo "Write the feature spec to \`${SPEC_FILE}\`. Do not modify any other files."
+          } > /tmp/claude_prompt.md
 
-          ## Discussion
-          ${COMMENTS}"
-
-          # Save to file (avoid shell escaping issues)
-          echo "$CONTEXT" > /tmp/issue_context.md
-          echo "title=$ISSUE_TITLE" >> "$GITHUB_OUTPUT"
-
-          # Extract keywords from title and body for build-context
-          KEYWORDS=$(echo "$ISSUE_TITLE $ISSUE_BODY" | tr '[:upper:]' '[:lower:]' | tr -cs '[:alnum:]' '\n' | sort -u | grep -v '^.\{0,2\}$' | head -20 | tr '\n' ' ')
-          echo "keywords=$KEYWORDS" >> "$GITHUB_OUTPUT"
-
-      - name: Build repository context
+      - name: Run Claude Code
         if: steps.auth.outputs.authorized == 'true'
-        run: |
-          npx tsx build-context.ts ${{ steps.issue.outputs.keywords }} > /tmp/repo_context.md
-        working-directory: .github/agent
+        uses: anthropics/claude-code-base-action@beta
+        with:
+          prompt_file: /tmp/claude_prompt.md
+          allowed_tools: "Read,Write,Edit,Glob,Grep"
+          model: ${{ steps.setup.outputs.model }}
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          max_turns: "30"
 
-      - name: Read system prompt
-        if: steps.auth.outputs.authorized == 'true'
-        run: |
-          cat .github/agent/spec-prompt.md > /tmp/system_prompt.md
-
-      - name: Call Claude API
-        if: steps.auth.outputs.authorized == 'true'
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: |
-          SYSTEM_PROMPT=$(cat /tmp/system_prompt.md)
-          ISSUE_CONTEXT=$(cat /tmp/issue_context.md)
-          REPO_CONTEXT=$(cat /tmp/repo_context.md)
-          STACK="${{ steps.config.outputs.stack }}"
-          MODEL="${{ steps.config.outputs.model }}"
-
-          USER_MESSAGE="## Tech Stack
-          ${STACK}
-
-          ## Issue Discussion
-          ${ISSUE_CONTEXT}
-
-          ## Repository Context
-          ${REPO_CONTEXT}
-
-          Please generate a feature spec for this issue."
-
-          # Build JSON payload
-          PAYLOAD=$(jq -n \
-            --arg model "$MODEL" \
-            --arg system "$SYSTEM_PROMPT" \
-            --arg user "$USER_MESSAGE" \
-            '{
-              model: $model,
-              max_tokens: 8192,
-              system: $system,
-              messages: [{ role: "user", content: $user }]
-            }')
-
-          RESPONSE=$(curl -s -X POST "https://api.anthropic.com/v1/messages" \
-            -H "Content-Type: application/json" \
-            -H "x-api-key: $ANTHROPIC_API_KEY" \
-            -H "anthropic-version: 2023-06-01" \
-            -d "$PAYLOAD")
-
-          # Extract text from response
-          SPEC_CONTENT=$(echo "$RESPONSE" | jq -r '.content[0].text // empty')
-
-          if [ -z "$SPEC_CONTENT" ]; then
-            echo "Error: Claude API returned no content"
-            echo "$RESPONSE" | jq .
-            exit 1
-          fi
-
-          echo "$SPEC_CONTENT" > /tmp/spec_output.md
-
-      - name: Create spec PR
+      - name: Create spec PR and acknowledge
         if: steps.auth.outputs.authorized == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
-          ISSUE_TITLE: ${{ steps.issue.outputs.title }}
+          ISSUE_TITLE: ${{ steps.prepare.outputs.title }}
         run: |
-          BRANCH="spec/issue-${ISSUE_NUMBER}"
           SPEC_FILE="features/issue-${ISSUE_NUMBER}.md"
+          BRANCH="spec/issue-${ISSUE_NUMBER}"
 
-          # Read reviewers from config
+          if [ ! -f "$SPEC_FILE" ]; then
+            echo "Error: Claude did not produce $SPEC_FILE"
+            exit 1
+          fi
+
           REVIEWERS=$(cd .github/agent && npx tsx parse-config.ts --list reviewers | paste -sd, -)
 
           git config user.name "agent-flow[bot]"
           git config user.email "agent-flow[bot]@users.noreply.github.com"
-
           git checkout -b "$BRANCH"
-          mkdir -p features
-          cp /tmp/spec_output.md "$SPEC_FILE"
           git add "$SPEC_FILE"
           git commit -m "Add spec for issue #${ISSUE_NUMBER}: ${ISSUE_TITLE}"
           git push origin "$BRANCH"
@@ -185,13 +124,7 @@ jobs:
           ---
           Source issue: #${ISSUE_NUMBER}"
 
-          PR_ARGS=(
-            --title "[SPEC] ${ISSUE_TITLE}"
-            --body "$PR_BODY"
-            --head "$BRANCH"
-            --base "main"
-          )
-
+          PR_ARGS=(--title "[SPEC] ${ISSUE_TITLE}" --body "$PR_BODY" --head "$BRANCH" --base "main")
           if [ -n "$REVIEWERS" ]; then
             PR_ARGS+=(--reviewer "$REVIEWERS")
           fi
@@ -199,11 +132,6 @@ jobs:
           PR_URL=$(gh pr create "${PR_ARGS[@]}")
           echo "Created PR: $PR_URL"
 
-      - name: Add rocket reaction
-        if: steps.auth.outputs.authorized == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
           gh api repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions \
             -f content=rocket
 
@@ -219,195 +147,115 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.issue.number }}
+          PR_BODY: ${{ github.event.issue.body }}
         run: |
-          PR_JSON=$(gh api repos/${{ github.repository }}/pulls/$PR_NUMBER)
-          HEAD_REF=$(echo "$PR_JSON" | jq -r '.head.ref')
-          PR_TITLE=$(echo "$PR_JSON" | jq -r '.title')
-          PR_BODY=$(echo "$PR_JSON" | jq -r '.body // ""')
+          HEAD_REF=$(gh api repos/${{ github.repository }}/pulls/$PR_NUMBER --jq '.head.ref')
+          ISSUE_NUMBER=$(echo "$HEAD_REF" | grep -oP 'issue-\K\d+' || echo "$PR_NUMBER")
+          SOURCE_ISSUE=$(echo "$PR_BODY" | grep -oP 'Source issue: #\K\d+' || echo "")
 
           echo "head_ref=$HEAD_REF" >> "$GITHUB_OUTPUT"
-          echo "title=$PR_TITLE" >> "$GITHUB_OUTPUT"
-
-          # Extract source issue number from PR body
-          SOURCE_ISSUE=$(echo "$PR_BODY" | grep -oP 'Source issue: #\K\d+' || echo "")
-          echo "source_issue=$SOURCE_ISSUE" >> "$GITHUB_OUTPUT"
-
-          # Extract issue number from branch name (spec/issue-123)
-          ISSUE_NUMBER=$(echo "$HEAD_REF" | grep -oP 'issue-\K\d+' || echo "$PR_NUMBER")
           echo "issue_number=$ISSUE_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "source_issue=$SOURCE_ISSUE" >> "$GITHUB_OUTPUT"
 
       - name: Checkout PR branch
         uses: actions/checkout@v4
         with:
           ref: ${{ steps.pr.outputs.head_ref }}
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-
-      - name: Install agent dependencies
-        run: npm install
-        working-directory: .github/agent
+      - name: Setup agent
+        id: setup
+        uses: ./.github/actions/setup-agent
 
       - name: Check authorization
         id: auth
+        working-directory: .github/agent
         env:
           COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
-        run: |
-          npx tsx parse-config.ts --check-user "$COMMENT_AUTHOR" >> "$GITHUB_OUTPUT"
-        working-directory: .github/agent
+        run: npx tsx parse-config.ts --check-user "$COMMENT_AUTHOR" >> "$GITHUB_OUTPUT"
 
-      - name: Add eyes reaction
+      - name: Acknowledge and build prompt
         if: steps.auth.outputs.authorized == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh api repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions \
-            -f content=eyes
-
-      - name: Load config
-        if: steps.auth.outputs.authorized == 'true'
-        id: config
-        run: |
-          npx tsx parse-config.ts model stack >> "$GITHUB_OUTPUT"
-        working-directory: .github/agent
-
-      - name: Gather context
-        if: steps.auth.outputs.authorized == 'true'
-        id: context
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.issue.number }}
           SOURCE_ISSUE: ${{ steps.pr.outputs.source_issue }}
           ISSUE_NUMBER: ${{ steps.pr.outputs.issue_number }}
+          STACK: ${{ steps.setup.outputs.stack }}
         run: |
+          gh api repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions \
+            -f content=eyes
+
           SPEC_FILE="features/issue-${ISSUE_NUMBER}.md"
 
-          # Read existing spec
-          EXISTING_SPEC=""
-          if [ -f "$SPEC_FILE" ]; then
-            EXISTING_SPEC=$(cat "$SPEC_FILE")
-          fi
+          PR_COMMENTS=$(gh api repos/${{ github.repository }}/pulls/$PR_NUMBER/comments --paginate \
+            | jq -r '.[] | "**\(.user.login)** on \(.path // "general"):\n\(.body)\n---"')
+          ISSUE_COMMENTS=$(gh api repos/${{ github.repository }}/issues/$PR_NUMBER/comments --paginate \
+            | jq -r '.[] | "**\(.user.login)** commented:\n\(.body)\n---"')
 
-          # Fetch PR review comments
-          PR_COMMENTS=$(gh api repos/${{ github.repository }}/pulls/$PR_NUMBER/comments --paginate | \
-            jq -r '.[] | "**\(.user.login)** on \(.path // "general"):\n\(.body)\n---"')
-
-          # Fetch PR issue-style comments
-          ISSUE_COMMENTS=$(gh api repos/${{ github.repository }}/issues/$PR_NUMBER/comments --paginate | \
-            jq -r '.[] | "**\(.user.login)** commented:\n\(.body)\n---"')
-
-          # Fetch original issue context if available
-          ISSUE_CONTEXT=""
+          ORIG_ISSUE_BLOCK=""
           if [ -n "$SOURCE_ISSUE" ]; then
             ISSUE_JSON=$(gh api repos/${{ github.repository }}/issues/$SOURCE_ISSUE)
-            ISSUE_TITLE=$(echo "$ISSUE_JSON" | jq -r '.title')
-            ISSUE_BODY=$(echo "$ISSUE_JSON" | jq -r '.body // ""')
-            ORIG_COMMENTS=$(gh api repos/${{ github.repository }}/issues/$SOURCE_ISSUE/comments --paginate | \
-              jq -r '.[] | "**\(.user.login)** commented:\n\(.body)\n---"')
-            ISSUE_CONTEXT="# Original Issue #${SOURCE_ISSUE}: ${ISSUE_TITLE}
+            ORIG_TITLE=$(echo "$ISSUE_JSON" | jq -r '.title')
+            ORIG_BODY=$(echo "$ISSUE_JSON" | jq -r '.body // ""')
+            ORIG_COMMENTS=$(gh api repos/${{ github.repository }}/issues/$SOURCE_ISSUE/comments --paginate \
+              | jq -r '.[] | "**\(.user.login)** commented:\n\(.body)\n---"')
+            ORIG_ISSUE_BLOCK="## Original Issue #${SOURCE_ISSUE}: ${ORIG_TITLE}
 
-          ## Issue Description
-          ${ISSUE_BODY}
+          ### Description
+          ${ORIG_BODY}
 
-          ## Issue Discussion
+          ### Discussion
           ${ORIG_COMMENTS}"
           fi
 
-          cat > /tmp/regenerate_context.md << CONTEXT_EOF
-          ${ISSUE_CONTEXT}
+          {
+            cat .github/agent/spec-prompt.md
+            echo
+            echo "## Tech Stack"
+            echo "$STACK"
+            echo
+            echo "$ORIG_ISSUE_BLOCK"
+            echo
+            echo "## Review Feedback on Current Spec"
+            echo
+            echo "### Review Comments"
+            echo "$PR_COMMENTS"
+            echo
+            echo "### General Comments"
+            echo "$ISSUE_COMMENTS"
+            echo
+            echo "## Task"
+            echo "The current spec is at \`${SPEC_FILE}\`. Read it, then rewrite it incorporating the review feedback above. Keep what works; fix what was criticized. Do not modify any other files."
+          } > /tmp/claude_prompt.md
 
-          # Current Spec
-          ${EXISTING_SPEC}
-
-          # Review Feedback on Spec PR
-          ## Review Comments
-          ${PR_COMMENTS}
-
-          ## General Comments
-          ${ISSUE_COMMENTS}
-          CONTEXT_EOF
-
-          # Extract keywords
-          KEYWORDS=$(echo "$EXISTING_SPEC" | tr '[:upper:]' '[:lower:]' | tr -cs '[:alnum:]' '\n' | sort -u | grep -v '^.\{0,2\}$' | head -20 | tr '\n' ' ')
-          echo "keywords=$KEYWORDS" >> "$GITHUB_OUTPUT"
-
-      - name: Build repository context
+      - name: Run Claude Code
         if: steps.auth.outputs.authorized == 'true'
-        run: |
-          npx tsx build-context.ts ${{ steps.context.outputs.keywords }} > /tmp/repo_context.md
-        working-directory: .github/agent
+        uses: anthropics/claude-code-base-action@beta
+        with:
+          prompt_file: /tmp/claude_prompt.md
+          allowed_tools: "Read,Write,Edit,Glob,Grep"
+          model: ${{ steps.setup.outputs.model }}
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          max_turns: "30"
 
-      - name: Call Claude API
-        if: steps.auth.outputs.authorized == 'true'
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          ISSUE_NUMBER: ${{ steps.pr.outputs.issue_number }}
-        run: |
-          SYSTEM_PROMPT=$(cat .github/agent/spec-prompt.md)
-          REGEN_CONTEXT=$(cat /tmp/regenerate_context.md)
-          REPO_CONTEXT=$(cat /tmp/repo_context.md)
-          STACK="${{ steps.config.outputs.stack }}"
-          MODEL="${{ steps.config.outputs.model }}"
-
-          USER_MESSAGE="## Tech Stack
-          ${STACK}
-
-          ## Context (Original Issue + Current Spec + Review Feedback)
-          ${REGEN_CONTEXT}
-
-          ## Repository Context
-          ${REPO_CONTEXT}
-
-          Please regenerate the spec, incorporating the review feedback above. Keep what works, fix what was criticized, and address any open questions raised by reviewers."
-
-          PAYLOAD=$(jq -n \
-            --arg model "$MODEL" \
-            --arg system "$SYSTEM_PROMPT" \
-            --arg user "$USER_MESSAGE" \
-            '{
-              model: $model,
-              max_tokens: 8192,
-              system: $system,
-              messages: [{ role: "user", content: $user }]
-            }')
-
-          RESPONSE=$(curl -s -X POST "https://api.anthropic.com/v1/messages" \
-            -H "Content-Type: application/json" \
-            -H "x-api-key: $ANTHROPIC_API_KEY" \
-            -H "anthropic-version: 2023-06-01" \
-            -d "$PAYLOAD")
-
-          SPEC_CONTENT=$(echo "$RESPONSE" | jq -r '.content[0].text // empty')
-
-          if [ -z "$SPEC_CONTENT" ]; then
-            echo "Error: Claude API returned no content"
-            echo "$RESPONSE" | jq .
-            exit 1
-          fi
-
-          SPEC_FILE="features/issue-${ISSUE_NUMBER}.md"
-          echo "$SPEC_CONTENT" > "$SPEC_FILE"
-
-      - name: Commit updated spec
+      - name: Commit and acknowledge
         if: steps.auth.outputs.authorized == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ISSUE_NUMBER: ${{ steps.pr.outputs.issue_number }}
         run: |
+          SPEC_FILE="features/issue-${ISSUE_NUMBER}.md"
+
           git config user.name "agent-flow[bot]"
           git config user.email "agent-flow[bot]@users.noreply.github.com"
-
-          SPEC_FILE="features/issue-${ISSUE_NUMBER}.md"
           git add "$SPEC_FILE"
-          git commit -m "Regenerate spec based on review feedback"
-          git push
 
-      - name: Add rocket reaction
-        if: steps.auth.outputs.authorized == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Regenerate spec based on review feedback"
+            git push
+          fi
+
           gh api repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions \
             -f content=rocket

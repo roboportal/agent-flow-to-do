@@ -5,11 +5,8 @@ import { parseValues, listValues, checkUser, type ConfigData } from "./parse-con
 const sampleConfig: ConfigData = {
   model: "claude-sonnet-4-20250514",
   stack: "Next.js + TypeScript",
-  max_context_tokens: 80000,
-  always_include: ["README.md", "package.json"],
   allowed_users: ["alice", "bob"],
   reviewers: ["charlie"],
-  triggers: { proceed: "/agent proceed", regenerate: "/agent regenerate" },
 };
 
 describe("parseValues", () => {
@@ -26,11 +23,6 @@ describe("parseValues", () => {
     assert.deepEqual(result, ["nonexistent="]);
   });
 
-  it("stringifies numeric values", () => {
-    const result = parseValues(sampleConfig, ["max_context_tokens"]);
-    assert.deepEqual(result, ["max_context_tokens=80000"]);
-  });
-
   it("returns empty array for no keys", () => {
     assert.deepEqual(parseValues(sampleConfig, []), []);
   });
@@ -38,8 +30,8 @@ describe("parseValues", () => {
 
 describe("listValues", () => {
   it("returns array items as strings", () => {
-    const result = listValues(sampleConfig, "always_include");
-    assert.deepEqual(result, ["README.md", "package.json"]);
+    const result = listValues(sampleConfig, "allowed_users");
+    assert.deepEqual(result, ["alice", "bob"]);
   });
 
   it("returns empty array for non-array key", () => {

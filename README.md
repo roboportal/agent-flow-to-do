@@ -1,6 +1,6 @@
 # Agent Flow
 
-A drop-in boilerplate that enables community-driven, AI-assisted development using only GitHub Actions and the Claude API. No external servers or services required.
+A drop-in boilerplate that enables community-driven, AI-assisted development using only GitHub Actions and [Claude Code](https://github.com/anthropics/claude-code-action). No external servers or services required.
 
 ## How It Works
 
@@ -16,9 +16,11 @@ flowchart TD
     F -->|Merge| A
 ```
 
-**Phase 1: Spec** — Someone posts `/agent proceed` on an issue. A GitHub Action reads the full issue thread and relevant repo files, calls Claude, and opens a PR with a spec file at `features/issue-{number}.md`. The team reviews and comments. Posting `/agent regenerate` on the spec PR triggers a new commit with an updated proposal. Approve and merge to move to phase 2.
+**Phase 1: Spec** — Someone posts `/agent proceed` on an issue. A GitHub Action runs Claude Code in the runner, passes it the issue thread, and lets it explore the repository with Read/Glob/Grep. Claude writes a spec file to `features/issue-{number}.md`, and the workflow opens a PR. The team reviews and comments. Posting `/agent regenerate` on the spec PR triggers a rerun with the review feedback as input. Approve and merge to move to phase 2.
 
-**Phase 2: Implementation** — Triggered automatically when a spec PR is merged. The agent reads the approved spec from `features/`, builds deeper repo context, calls Claude, and opens a draft implementation PR. The team can pull the branch and continue work manually (e.g., with Claude Code), or review and merge as-is.
+**Phase 2: Implementation** — Triggered automatically when a spec PR is merged. The workflow launches Claude Code again, pointing it at the approved spec. Claude reads the spec, explores the codebase, and edits files directly. The workflow commits the result and opens a draft PR. The team can pull the branch and continue work manually, or review and merge as-is.
+
+Both phases use [`anthropics/claude-code-base-action`](https://github.com/anthropics/claude-code-base-action), which runs the real Claude Code agentic loop in the runner — not a one-shot API call. This means Claude can iteratively explore the repo, read exactly the files it needs, and write output directly rather than producing a single text blob that has to be parsed.
 
 ## Setup
 
@@ -40,21 +42,12 @@ allowed_users:
   - "your-username"
   - "trusted-contributor"
 
-# Files to always include in agent context
-always_include:
-  - "README.md"
-  - "package.json"
-  - "pyproject.toml"
-
 # Auto-assign reviewers to agent PRs
 reviewers:
   - "your-username"
 
 # Claude model (default: claude-sonnet-4-20250514)
 model: "claude-sonnet-4-20250514"
-
-# Token budget for repo context
-max_context_tokens: 80000
 ```
 
 4. **Optionally customize the prompts** in `.github/agent/spec-prompt.md` and `.github/agent/implement-prompt.md`.
@@ -76,12 +69,8 @@ max_context_tokens: 80000
 |-----|-------------|---------|
 | `stack` | Description of your tech stack | *(required)* |
 | `allowed_users` | GitHub usernames allowed to trigger agent commands | `[]` (anyone) |
-| `always_include` | Files always included in agent context | `["README.md"]` |
 | `reviewers` | GitHub usernames for PR review assignment | `[]` |
-| `triggers.proceed` | Command to trigger spec generation | `/agent proceed` |
-| `triggers.regenerate` | Command to trigger spec regeneration | `/agent regenerate` |
 | `model` | Claude model identifier | `claude-sonnet-4-20250514` |
-| `max_context_tokens` | Token budget for repository context | `80000` |
 
 ## File Structure
 
@@ -90,13 +79,13 @@ max_context_tokens: 80000
   workflows/
     agent-spec.yml              # Handles /agent proceed and /agent regenerate
     agent-implement.yml         # Triggered by spec PR merge
+  actions/
+    setup-agent/action.yml      # Shared setup (Node, deps, config loading)
   agent/
     config.yml                  # Project configuration
-    spec-prompt.md              # System prompt for spec generation
-    implement-prompt.md         # System prompt for implementation
-    build-context.ts            # Smart file picker for repo context
+    spec-prompt.md              # Base instructions for spec generation
+    implement-prompt.md         # Base instructions for implementation
     parse-config.ts             # Config parser for workflow steps
-    build-context.test.ts       # Tests for build-context
     parse-config.test.ts        # Tests for parse-config
     package.json                # Script dependencies (js-yaml, tsx)
 features/                       # Spec files (features/issue-123.md)

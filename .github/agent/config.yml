@@ -2,14 +2,12 @@
 # Customize this file for your project.
 
 # Describe your tech stack so the agent understands your project context.
+# For greenfield repos, tell the agent how to scaffold. Examples:
+#   stack: "Ruby on Rails 8 + PostgreSQL. If empty, run `rails new . --database=postgresql --skip-git`."
+#   stack: "React + Vite + TypeScript. If empty, run `npm create vite@latest . -- --template react-ts`."
+#   stack: "Python 3.12 + FastAPI + uv. If empty, run `uv init` and `uv add fastapi uvicorn`."
+#   stack: "Node.js + Express + TypeScript. If empty, run `npm init -y && npm i express` and set up tsconfig."
 stack: "Describe your stack here (e.g., Next.js + TypeScript, Python/FastAPI, Go microservices, etc.)"
-
-# Files to always include in the agent's context, regardless of relevance scoring.
-always_include:
-  - "README.md"
-  # - "package.json"
-  # - "pyproject.toml"
-  # - "go.mod"
 
 # GitHub usernames allowed to trigger agent commands (/agent proceed, /agent regenerate).
 # In public repos, this prevents unauthorized users from triggering API calls.
@@ -21,14 +19,5 @@ allowed_users: []
 # GitHub usernames to auto-assign as reviewers on agent-created PRs.
 reviewers: []
 
-# Trigger commands. Change these if they conflict with other bots.
-triggers:
-  proceed: "/agent proceed"
-  regenerate: "/agent regenerate"
-
 # Claude model to use for generation.
 model: "claude-sonnet-4-20250514"
-
-# Maximum token budget for repository context sent to Claude.
-# The build-context script will select files up to this limit.
-max_context_tokens: 80000

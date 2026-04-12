@@ -1,0 +1,29 @@
+name: Setup Agent
+description: Install agent script dependencies and load configuration from config.yml.
+
+outputs:
+  model:
+    description: Claude model identifier from config.yml
+    value: ${{ steps.config.outputs.model }}
+  stack:
+    description: Tech stack description from config.yml
+    value: ${{ steps.config.outputs.stack }}
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: "22"
+
+    - name: Install dependencies
+      shell: bash
+      working-directory: .github/agent
+      run: npm install
+
+    - name: Load config
+      id: config
+      shell: bash
+      working-directory: .github/agent
+      run: npx tsx parse-config.ts model stack >> "$GITHUB_OUTPUT"
