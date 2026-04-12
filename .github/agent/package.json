@@ -1,0 +1,16 @@
+{
+  "name": "agent-flow-scripts",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --import tsx --test *.test.ts"
+  },
+  "dependencies": {
+    "js-yaml": "^4.1.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0",
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^22.0.0"
+  }
+}
