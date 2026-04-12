@@ -7,17 +7,19 @@
 #   stack: "React + Vite + TypeScript. If empty, run `npm create vite@latest . -- --template react-ts`."
 #   stack: "Python 3.12 + FastAPI + uv. If empty, run `uv init` and `uv add fastapi uvicorn`."
 #   stack: "Node.js + Express + TypeScript. If empty, run `npm init -y && npm i express` and set up tsconfig."
-stack: "Describe your stack here (e.g., Next.js + TypeScript, Python/FastAPI, Go microservices, etc.)"
+stack: "Ruby on Rails"
 
 # GitHub usernames allowed to trigger agent commands (/agent proceed, /agent regenerate).
 # In public repos, this prevents unauthorized users from triggering API calls.
 # Leave empty to allow any user (not recommended for public repos).
-allowed_users: []
-  # - "your-username"
-  # - "trusted-contributor"
+allowed_users: 
+  - malykhin
+  - Etun
 
 # GitHub usernames to auto-assign as reviewers on agent-created PRs.
-reviewers: []
+reviewers:
+  - malykhin
+  - Etun
 
 # Claude model to use for generation.
 model: "claude-sonnet-4-20250514"
