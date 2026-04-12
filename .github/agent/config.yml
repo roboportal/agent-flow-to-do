@@ -2,7 +2,7 @@
 # Customize this file for your project.
 
 # Describe your tech stack so the agent understands your project context.
-stack: "Describe your stack here (e.g., Next.js + TypeScript, Python/FastAPI, Go microservices, etc.)"
+stack: "ruby on rails"
 
 # Files to always include in the agent's context, regardless of relevance scoring.
 always_include:
@@ -14,12 +14,16 @@ always_include:
 # GitHub usernames allowed to trigger agent commands (/agent proceed, /agent regenerate).
 # In public repos, this prevents unauthorized users from triggering API calls.
 # Leave empty to allow any user (not recommended for public repos).
-allowed_users: []
+allowed_users: 
+  - malykhin
+  - Etun
   # - "your-username"
   # - "trusted-contributor"
 
 # GitHub usernames to auto-assign as reviewers on agent-created PRs.
-reviewers: []
+reviewers: 
+  - malykhin
+  - Etun
 
 # Trigger commands. Change these if they conflict with other bots.
 triggers:
