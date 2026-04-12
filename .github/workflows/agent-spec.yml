@@ -100,6 +100,14 @@ jobs:
             exit 1
           fi
 
+          # A spec branch from a previous run would indicate an open/abandoned spec PR.
+          # Use /agent regenerate on that PR instead of re-running /agent proceed.
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+            echo "Branch $BRANCH already exists on origin."
+            gh issue comment "$ISSUE_NUMBER" --body "A spec branch \`${BRANCH}\` already exists. If there is an open spec PR, post \`/agent regenerate\` on it to update the spec. Otherwise, close or delete that branch and re-run \`/agent proceed\`."
+            exit 1
+          fi
+
           REVIEWERS=$(cd .github/agent && npx tsx parse-config.ts --list reviewers | paste -sd, -)
 
           git config user.name "agent-flow[bot]"

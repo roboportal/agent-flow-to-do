@@ -79,6 +79,15 @@ jobs:
           SPEC_PR: ${{ github.event.pull_request.number }}
         run: |
           BRANCH="implement/issue-${ISSUE_NUMBER}"
+
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+            echo "Branch $BRANCH already exists on origin — an earlier implementation run likely produced a PR."
+            if [ -n "$SOURCE_ISSUE" ]; then
+              gh issue comment "$SOURCE_ISSUE" --body "An implementation branch \`${BRANCH}\` already exists. Close or delete it before re-running the implement phase."
+            fi
+            exit 1
+          fi
+
           REVIEWERS=$(cd .github/agent && npx tsx parse-config.ts --list reviewers | paste -sd, -)
 
           git config user.name "agent-flow[bot]"
