@@ -1,0 +1,39 @@
+<h2>All Todos</h2>
+
+<%= link_to 'New Todo', new_todo_path, class: 'btn' %>
+
+<div style="margin-top: 30px;">
+  <% if @todos.any? %>
+    <% @todos.each do |todo| %>
+      <div class="todo-item <%= 'completed' if todo.completed %>">
+        <h3 class="todo-title <%= 'completed' if todo.completed %>">
+          <%= todo.title %>
+        </h3>
+        
+        <% if todo.description.present? %>
+          <div class="todo-description">
+            <%= simple_format(todo.description) %>
+          </div>
+        <% end %>
+        
+        <div class="todo-meta">
+          Status: <strong><%= todo.completed? ? 'Completed' : 'Pending' %></strong> •
+          Created: <%= todo.created_at.strftime('%B %d, %Y at %I:%M %p') %>
+        </div>
+        
+        <div class="todo-actions">
+          <%= link_to 'View', todo_path(todo), class: 'btn btn-secondary' %>
+          <%= link_to 'Edit', edit_todo_path(todo), class: 'btn' %>
+          <%= link_to 'Delete', todo_path(todo), method: :delete,
+                      confirm: 'Are you sure?', class: 'btn btn-danger' %>
+        </div>
+      </div>
+    <% end %>
+  <% else %>
+    <div style="text-align: center; padding: 40px; color: #666;">
+      <h3>No todos yet!</h3>
+      <p>Start by creating your first todo.</p>
+      <%= link_to 'Create Todo', new_todo_path, class: 'btn' %>
+    </div>
+  <% end %>
+</div>

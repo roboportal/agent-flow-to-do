@@ -1,0 +1,8 @@
+<h2>Edit Todo</h2>
+
+<%= render 'form', todo: @todo %>
+
+<div style="margin-top: 20px;">
+  <%= link_to 'Show', @todo, class: 'btn btn-secondary' %>
+  <%= link_to 'Back', todos_path, class: 'btn btn-secondary' %>
+</div>
