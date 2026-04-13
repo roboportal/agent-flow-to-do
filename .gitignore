@@ -1,1 +1,43 @@
+# Dependencies
 node_modules/
+vendor/bundle/
+
+# Logs and tmp files
+log/*.log
+tmp/*
+!tmp/.keep
+!tmp/pids/
+tmp/pids/*
+!tmp/pids/.keep
+
+# Database files
+db/*.sqlite3
+db/*.sqlite3-*
+
+# Rails specific
+.sass-cache/
+storage/*
+!storage/.keep
+.DS_Store
+.vscode/
+.idea/
+
+# Environment files
+.env*
+
+# Ignore key files for decrypting credentials and more.
+/config/*.key
+/config/master.key
+
+# Ignore uploaded files in development
+/public/uploads/
+
+# Coverage reports
+coverage/
+
+# Build artifacts
+public/assets/
+public/packs/
+public/packs-test/
+tmp/storage/*
+!tmp/storage/.keep
