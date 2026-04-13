@@ -4,6 +4,8 @@ on:
   pull_request:
     types: [closed]
     branches: [main]
+  issue_comment:
+    types: [created]
 
 permissions:
   contents: write
@@ -12,10 +14,16 @@ permissions:
 
 jobs:
   implement:
-    # Only run when a spec PR is merged (not just closed)
+    # Two trigger paths:
+    #   1. Spec PR merged into main (automatic handoff from spec phase)
+    #   2. `/agent implement` comment on an issue (manual re-run after workflow/prompt changes)
     if: >-
-      github.event.pull_request.merged == true
-      && startsWith(github.event.pull_request.head.ref, 'spec/')
+      (github.event_name == 'pull_request'
+        && github.event.pull_request.merged == true
+        && startsWith(github.event.pull_request.head.ref, 'spec/'))
+      || (github.event_name == 'issue_comment'
+        && !github.event.issue.pull_request
+        && contains(github.event.comment.body, '/agent implement'))
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -27,25 +35,67 @@ jobs:
         id: setup
         uses: ./.github/actions/setup-agent
 
+      - name: Check authorization (comment trigger only)
+        id: auth
+        if: github.event_name == 'issue_comment'
+        working-directory: .github/agent
+        env:
+          COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+        run: npx tsx parse-config.ts --check-user "$COMMENT_AUTHOR" >> "$GITHUB_OUTPUT"
+
+      - name: Stop if unauthorized
+        if: github.event_name == 'issue_comment' && steps.auth.outputs.authorized != 'true'
+        run: |
+          echo "User not authorized to trigger /agent implement"
+          exit 1
+
       - name: Extract spec metadata and build prompt
         id: spec
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
           STACK: ${{ steps.setup.outputs.stack }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}
           SPEC_BRANCH: ${{ github.event.pull_request.head.ref }}
+          ISSUE_NUMBER_INPUT: ${{ github.event.issue.number }}
+          COMMENT_ID: ${{ github.event.comment.id }}
         run: |
-          ISSUE_NUMBER=$(echo "$SPEC_BRANCH" | grep -oP 'issue-\K\d+' || echo "$PR_NUMBER")
-          SPEC_FILE="features/issue-${ISSUE_NUMBER}.md"
+          if [ "$EVENT_NAME" = "issue_comment" ]; then
+            # Manual re-run: find the spec PR for this issue to recover title/metadata.
+            gh api repos/${{ github.repository }}/issues/comments/$COMMENT_ID/reactions \
+              -f content=eyes || true
 
-          if [ ! -f "$SPEC_FILE" ]; then
-            echo "Error: $SPEC_FILE not found after merge"
-            exit 1
+            ISSUE_NUMBER="$ISSUE_NUMBER_INPUT"
+            SOURCE_ISSUE="$ISSUE_NUMBER"
+
+            # Find the merged spec PR for this issue (most recent match).
+            SPEC_PR_JSON=$(gh pr list --state merged --head "spec/issue-${ISSUE_NUMBER}" \
+              --json number,title --limit 1)
+            SPEC_PR_NUM=$(echo "$SPEC_PR_JSON" | jq -r '.[0].number // ""')
+            SPEC_PR_TITLE=$(echo "$SPEC_PR_JSON" | jq -r '.[0].title // ""')
+
+            if [ -z "$SPEC_PR_NUM" ]; then
+              # Fall back to issue title if no merged spec PR found.
+              SPEC_PR_TITLE=$(gh api repos/${{ github.repository }}/issues/$ISSUE_NUMBER --jq '.title')
+              SPEC_PR_NUM=""
+            fi
+
+            CLEAN_TITLE=$(echo "$SPEC_PR_TITLE" | sed 's/^\[SPEC\][[:space:]]*//')
+            echo "spec_pr=$SPEC_PR_NUM" >> "$GITHUB_OUTPUT"
+          else
+            ISSUE_NUMBER=$(echo "$SPEC_BRANCH" | grep -oP 'issue-\K\d+' || echo "$PR_NUMBER")
+            SOURCE_ISSUE=$(echo "$PR_BODY" | grep -oP 'Source issue: #\K\d+' || echo "")
+            CLEAN_TITLE=$(echo "$PR_TITLE" | sed 's/^\[SPEC\][[:space:]]*//')
+            echo "spec_pr=$PR_NUMBER" >> "$GITHUB_OUTPUT"
           fi
 
-          SOURCE_ISSUE=$(echo "$PR_BODY" | grep -oP 'Source issue: #\K\d+' || echo "")
-          CLEAN_TITLE=$(echo "$PR_TITLE" | sed 's/^\[SPEC\][[:space:]]*//')
+          SPEC_FILE="features/issue-${ISSUE_NUMBER}.md"
+          if [ ! -f "$SPEC_FILE" ]; then
+            echo "Error: $SPEC_FILE not found on main"
+            exit 1
+          fi
 
           echo "issue_number=$ISSUE_NUMBER" >> "$GITHUB_OUTPUT"
           echo "source_issue=$SOURCE_ISSUE" >> "$GITHUB_OUTPUT"
@@ -73,19 +123,31 @@ jobs:
       - name: Create implementation PR
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
           ISSUE_NUMBER: ${{ steps.spec.outputs.issue_number }}
           SOURCE_ISSUE: ${{ steps.spec.outputs.source_issue }}
           TITLE: ${{ steps.spec.outputs.title }}
-          SPEC_PR: ${{ github.event.pull_request.number }}
+          SPEC_PR: ${{ steps.spec.outputs.spec_pr }}
+          COMMENT_ID: ${{ github.event.comment.id }}
         run: |
           BRANCH="implement/issue-${ISSUE_NUMBER}"
 
           if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
-            echo "Branch $BRANCH already exists on origin — an earlier implementation run likely produced a PR."
-            if [ -n "$SOURCE_ISSUE" ]; then
-              gh issue comment "$SOURCE_ISSUE" --body "An implementation branch \`${BRANCH}\` already exists. Close or delete it before re-running the implement phase."
+            if [ "$EVENT_NAME" = "issue_comment" ]; then
+              # Manual re-run: close any open draft impl PR and delete the stale branch.
+              echo "Manual re-run: cleaning up existing $BRANCH"
+              OPEN_PR=$(gh pr list --state open --head "$BRANCH" --json number --jq '.[0].number // ""')
+              if [ -n "$OPEN_PR" ]; then
+                gh pr close "$OPEN_PR" --comment "Superseded by manual \`/agent implement\` re-run."
+              fi
+              git push origin --delete "$BRANCH" || true
+            else
+              echo "Branch $BRANCH already exists on origin — an earlier implementation run likely produced a PR."
+              if [ -n "$SOURCE_ISSUE" ]; then
+                gh issue comment "$SOURCE_ISSUE" --body "An implementation branch \`${BRANCH}\` already exists. Post \`/agent implement\` on issue #${SOURCE_ISSUE} to re-run, or close/delete the branch manually."
+              fi
+              exit 1
             fi
-            exit 1
           fi
 
           REVIEWERS=$(cd .github/agent && npx tsx parse-config.ts --list reviewers | paste -sd, -)
@@ -106,9 +168,12 @@ jobs:
             exit 1
           fi
 
+          SPEC_PR_REF="${SPEC_PR:+#${SPEC_PR}}"
+          SPEC_PR_REF="${SPEC_PR_REF:-(none)}"
+
           git commit -m "Implement: ${TITLE}
 
-          Based on spec from PR #${SPEC_PR}
+          Based on spec ${SPEC_PR_REF}
           Source issue: #${SOURCE_ISSUE:-$ISSUE_NUMBER}"
           git push origin "$BRANCH"
 
@@ -121,13 +186,13 @@ jobs:
 
           This implementation was auto-generated by Agent Flow based on the approved spec.
 
-          - Spec PR: #${SPEC_PR}
+          - Spec PR: ${SPEC_PR_REF}
           - Spec file: \`features/issue-${ISSUE_NUMBER}.md\`
           - Source issue: #${SOURCE_ISSUE:-$ISSUE_NUMBER}
 
           ### How to review
           - Pull this branch locally to test: \`git checkout ${BRANCH}\`
-          - Review the changes against the spec in #${SPEC_PR}
+          - Review the changes against the spec
           - Continue development manually if needed (e.g., with Claude Code)
 
           ${ISSUE_REF}"
@@ -142,7 +207,10 @@ jobs:
 
           if [ -n "$SOURCE_ISSUE" ]; then
             gh issue comment "$SOURCE_ISSUE" \
-              --body "Implementation draft PR created: ${PR_URL}
+              --body "Implementation draft PR created: ${PR_URL}"
+          fi
 
-          This was auto-generated from the approved spec in #${SPEC_PR}."
+          if [ "$EVENT_NAME" = "issue_comment" ] && [ -n "$COMMENT_ID" ]; then
+            gh api repos/${{ github.repository }}/issues/comments/$COMMENT_ID/reactions \
+              -f content=rocket || true
           fi
