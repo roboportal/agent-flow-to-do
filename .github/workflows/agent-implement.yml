@@ -262,6 +262,10 @@ jobs:
           git checkout HEAD -- .github/ 2>/dev/null || true
           git clean -fd .github/
 
+          # Remove claude-code-base-action's execution log — it dumps the agent's full
+          # transcript to output.txt in the workspace root and we don't want it in the PR.
+          rm -f output.txt
+
           git config user.name "agent-flow[bot]"
           git config user.email "agent-flow[bot]@users.noreply.github.com"
           git checkout -b "$BRANCH"
