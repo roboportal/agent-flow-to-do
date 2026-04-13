@@ -1,0 +1,58 @@
+<% content_for :title, "Tasks" %>
+
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <h1>Tasks</h1>
+  <%= link_to "New Task", new_task_path, class: "btn btn-primary" %>
+</div>
+
+<div class="mb-3">
+  <div class="btn-group" role="group">
+    <%= link_to "All", tasks_path, class: "btn #{'btn-primary' if params[:filter].blank?} #{'btn-outline-primary' unless params[:filter].blank?}" %>
+    <%= link_to "Pending", tasks_path(filter: 'pending'), class: "btn #{'btn-primary' if params[:filter] == 'pending'} #{'btn-outline-primary' unless params[:filter] == 'pending'}" %>
+    <%= link_to "Completed", tasks_path(filter: 'completed'), class: "btn #{'btn-primary' if params[:filter] == 'completed'} #{'btn-outline-primary' unless params[:filter] == 'completed'}" %>
+  </div>
+</div>
+
+<% if @tasks.any? %>
+  <div class="row">
+    <% @tasks.each do |task| %>
+      <div class="col-md-6 col-lg-4 mb-3">
+        <div class="card">
+          <div class="card-body">
+            <div class="d-flex justify-content-between align-items-start mb-2">
+              <h5 class="card-title <%= 'text-decoration-line-through text-muted' if task.completed %>">
+                <%= task.title %>
+              </h5>
+              <span class="badge <%= task.completed? ? 'bg-success' : 'bg-warning' %>">
+                <%= task.completed? ? 'Completed' : 'Pending' %>
+              </span>
+            </div>
+            
+            <% if task.description.present? %>
+              <p class="card-text">
+                <%= truncate(task.description, length: 100) %>
+              </p>
+            <% end %>
+            
+            <p class="card-text">
+              <small class="text-muted">Created <%= time_ago_in_words(task.created_at) %> ago</small>
+            </p>
+            
+            <div class="btn-group-sm d-flex gap-1">
+              <%= link_to "View", task, class: "btn btn-outline-primary btn-sm" %>
+              <%= link_to "Edit", edit_task_path(task), class: "btn btn-outline-secondary btn-sm" %>
+              <%= button_to "Delete", task_path(task), method: :delete, 
+                            class: "btn btn-outline-danger btn-sm",
+                            data: { confirm: 'Are you sure?' } %>
+            </div>
+          </div>
+        </div>
+      </div>
+    <% end %>
+  </div>
+<% else %>
+  <div class="text-center py-5">
+    <p class="lead text-muted">No tasks found.</p>
+    <%= link_to "Create your first task", new_task_path, class: "btn btn-primary" %>
+  </div>
+<% end %>
