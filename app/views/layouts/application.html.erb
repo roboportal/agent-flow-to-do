@@ -35,12 +35,27 @@
         </button>
         <div class="collapse navbar-collapse" id="navbarNav">
           <ul class="navbar-nav ms-auto">
-            <li class="nav-item">
-              <%= link_to "All Tasks", root_path, class: "nav-link" %>
-            </li>
-            <li class="nav-item">
-              <%= link_to "New Task", new_task_path, class: "nav-link" %>
-            </li>
+            <% if logged_in? %>
+              <li class="nav-item">
+                <%= link_to "All Tasks", root_path, class: "nav-link" %>
+              </li>
+              <li class="nav-item">
+                <%= link_to "New Task", new_task_path, class: "nav-link" %>
+              </li>
+              <li class="nav-item">
+                <span class="navbar-text">Welcome, <%= current_user.email %></span>
+              </li>
+              <li class="nav-item">
+                <%= link_to "Log Out", logout_path, method: :delete, class: "nav-link" %>
+              </li>
+            <% else %>
+              <li class="nav-item">
+                <%= link_to "Log In", login_path, class: "nav-link" %>
+              </li>
+              <li class="nav-item">
+                <%= link_to "Sign Up", signup_path, class: "nav-link" %>
+              </li>
+            <% end %>
           </ul>
         </div>
       </div>
