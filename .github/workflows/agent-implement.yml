@@ -168,6 +168,22 @@ jobs:
             exit 1
           fi
 
+          # Sanity check: a runaway commit (usually a missing .gitignore after scaffolding —
+          # node_modules, vendor/bundle, etc.) produces an unreviewable PR. Bail out so the
+          # human can fix .gitignore and re-run with /agent implement.
+          STAGED_COUNT=$(git diff --cached --name-only | wc -l | tr -d ' ')
+          MAX_FILES="${AGENT_MAX_FILES:-600}"
+          if [ "$STAGED_COUNT" -gt "$MAX_FILES" ]; then
+            echo "Error: $STAGED_COUNT staged files exceeds limit of $MAX_FILES."
+            echo "This usually means .gitignore is missing entries (node_modules, vendor/bundle, dist, etc.)."
+            echo "First 30 offenders:"
+            git diff --cached --name-only | head -30
+            if [ -n "$SOURCE_ISSUE" ]; then
+              gh issue comment "$SOURCE_ISSUE" --body "Implementation aborted: would commit ${STAGED_COUNT} files (limit ${MAX_FILES}). Likely a missing \`.gitignore\` after scaffolding. Fix the prompt or \`.gitignore\` expectations and re-run with \`/agent implement\`."
+            fi
+            exit 1
+          fi
+
           SPEC_PR_REF="${SPEC_PR:+#${SPEC_PR}}"
           SPEC_PR_REF="${SPEC_PR_REF:-(none)}"
 

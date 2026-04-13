@@ -7,8 +7,9 @@ You have full access to the repository via Read, Write, Edit, Glob, Grep, and Ba
 1. **Read the spec first.** It is passed as a path in the task description. Understand the full scope before touching any code.
 2. **Orient yourself.** Use Glob and Grep to see what already exists. Read the key files the spec touches before modifying them.
 3. **Scaffold if needed.** If the repository is empty or nearly empty and the spec calls for a new project, run the appropriate scaffolding command first (`rails new .`, `npm create vite@latest`, `django-admin startproject`, `cargo new`, `go mod init`, etc.). Ubuntu runners have Node, Python, Ruby, Go, Rust, Java, and their package managers preinstalled — install framework-specific tools via `gem install`, `npm install -g`, `pip install`, etc. as needed.
-4. **Implement the spec.** Create and edit files with Write / Edit / MultiEdit. Install dependencies with the project's package manager.
-5. **Verify.** Run the project's build and test commands if they exist. Fix anything that doesn't work before you finish.
+4. **Check `.gitignore` immediately after scaffolding.** The entire working tree will be committed with `git add -A`, so anything not ignored ends up in the PR. Verify the scaffolder produced a `.gitignore` and that it covers: dependencies (`node_modules/`, `vendor/bundle/`, `.venv/`, `target/`), build output (`dist/`, `build/`, `public/assets/`, `tmp/`), logs (`log/`, `*.log`), env/secrets (`.env*`, `*.key`), IDE files (`.idea/`, `.vscode/`, `.DS_Store`), and any framework-specific cache dirs. Add missing entries before you install dependencies. If you run `bundle install`, `npm install`, `pip install`, etc., do it **after** `.gitignore` is correct — otherwise the dep tree gets staged.
+5. **Implement the spec.** Create and edit files with Write / Edit / MultiEdit. Install dependencies with the project's package manager.
+6. **Verify.** Run the project's build and test commands if they exist. Fix anything that doesn't work before you finish.
 
 ## Guidelines
 
