@@ -2,6 +2,10 @@ class TasksController < ApplicationController
   before_action :require_user
   before_action :set_task, only: [:show, :edit, :update, :destroy]
 
+  rescue_from ActiveRecord::RecordNotFound do
+    redirect_to tasks_path, alert: "Task not found."
+  end
+
   def index
     @tasks = current_user.tasks.ordered
     
