@@ -97,6 +97,13 @@ jobs:
             exit 1
           fi
 
+          # Record the exact revision of the spec file that Claude will implement against.
+          # If the spec is edited later, we still know what was implemented.
+          SPEC_SHA=$(git log -1 --format=%H -- "$SPEC_FILE")
+          SPEC_SHORT_SHA=$(git log -1 --format=%h -- "$SPEC_FILE")
+          echo "spec_sha=$SPEC_SHA" >> "$GITHUB_OUTPUT"
+          echo "spec_short_sha=$SPEC_SHORT_SHA" >> "$GITHUB_OUTPUT"
+
           echo "issue_number=$ISSUE_NUMBER" >> "$GITHUB_OUTPUT"
           echo "source_issue=$SOURCE_ISSUE" >> "$GITHUB_OUTPUT"
           echo "title=$CLEAN_TITLE" >> "$GITHUB_OUTPUT"
@@ -120,6 +127,99 @@ jobs:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           max_turns: "60"
 
+      - name: Build .gitignore review prompt
+        run: |
+          cat > /tmp/gitignore_prompt.md <<'PROMPT_EOF'
+          You are reviewing the `.gitignore` file for a project that was just scaffolded and implemented. Your only job is to make sure `.gitignore` is complete so that running `git add -A` does NOT sweep up dependencies, build output, logs, env files, or IDE junk.
+
+          ## What to do
+
+          1. **Detect the stack.** Use Glob/Read to see what's actually in the working tree. Look for `package.json`, `Gemfile`, `requirements.txt`/`pyproject.toml`, `Cargo.toml`, `go.mod`, etc. Identify every language/framework present — it may be more than one (e.g., Rails + esbuild + yarn).
+          2. **Read the current `.gitignore`.** If it doesn't exist, create it.
+          3. **Run `git status --ignored` and `git ls-files --others --exclude-standard | head -50`** to see what's currently untracked-and-not-ignored. Anything heavy in that list (e.g., `node_modules/`, `vendor/bundle/`, `tmp/cache/`, `.venv/`, `target/`, `dist/`, `build/`, `__pycache__/`, `*.log`) is a leak.
+          4. **Add any missing patterns** to `.gitignore`. Cover, at minimum, for every detected stack:
+             - Dependencies: `node_modules/`, `vendor/bundle/`, `.venv/`, `venv/`, `__pycache__/`, `*.pyc`, `target/`, `.bundle/`
+             - Build output: `dist/`, `build/`, `out/`, `.next/`, `.nuxt/`, `.turbo/`, `public/assets/`, `public/packs/`, `tmp/`
+             - Logs: `log/`, `*.log`
+             - Env & secrets: `.env`, `.env.*` (but keep `.env.example` tracked with `!.env.example`), `*.key`, `*.pem`, `config/master.key`, `config/credentials/*.key`
+             - IDE/OS: `.idea/`, `.vscode/`, `.DS_Store`, `Thumbs.db`
+          5. **Verify.** After your edits, re-run `git status --ignored` and confirm no heavy directories appear as untracked. The total untracked file count (`git ls-files --others --exclude-standard | wc -l`) should be in the low hundreds at most — if it's in the thousands, you missed something.
+
+          ## Rules
+
+          - Only touch `.gitignore`. Do not modify any other file.
+          - Do not remove existing entries — only add.
+          - Do not delete files from the working tree. Fix `.gitignore`, don't `rm -rf`.
+          - If the project is a standard Rails / Next.js / Django / etc. scaffold, cross-reference the framework's canonical `.gitignore` (github.com/github/gitignore) and make sure nothing important is missing.
+          PROMPT_EOF
+
+      - name: Run Claude Code (.gitignore review)
+        uses: anthropics/claude-code-base-action@beta
+        with:
+          prompt_file: /tmp/gitignore_prompt.md
+          allowed_tools: "Read,Write,Edit,Glob,Grep,Bash"
+          model: ${{ steps.setup.outputs.model }}
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          max_turns: "15"
+
+      - name: Run project tests
+        id: tests
+        continue-on-error: true
+        run: |
+          # Detect the stack and run its canonical test command. The goal is to give
+          # human reviewers a signal about whether the agent's code actually works —
+          # we never fail the workflow here, only record the result for the PR body.
+          set +e
+          STATUS="skipped"
+          CMD=""
+          LOG=/tmp/test_output.log
+          : > "$LOG"
+
+          if [ -f package.json ] && jq -e '.scripts.test' package.json >/dev/null 2>&1; then
+            CMD="npm test"
+          elif [ -f Gemfile ]; then
+            if grep -q '"rspec"\|gem .rspec' Gemfile 2>/dev/null; then
+              CMD="bundle exec rspec"
+            else
+              CMD="bundle exec rails test"
+            fi
+          elif [ -f pyproject.toml ] || [ -f requirements.txt ]; then
+            if command -v pytest >/dev/null 2>&1 || python -c 'import pytest' 2>/dev/null; then
+              CMD="python -m pytest"
+            fi
+          elif [ -f go.mod ]; then
+            CMD="go test ./..."
+          elif [ -f Cargo.toml ]; then
+            CMD="cargo test"
+          fi
+
+          if [ -z "$CMD" ]; then
+            echo "No recognized test command — skipping."
+            echo "status=skipped" >> "$GITHUB_OUTPUT"
+            echo "cmd=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Running: $CMD"
+          timeout 600 bash -c "$CMD" >"$LOG" 2>&1
+          EXIT_CODE=$?
+          if [ $EXIT_CODE -eq 0 ]; then
+            STATUS="passed"
+          elif [ $EXIT_CODE -eq 124 ]; then
+            STATUS="timeout"
+          else
+            STATUS="failed"
+          fi
+
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          echo "cmd=$CMD" >> "$GITHUB_OUTPUT"
+          echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
+
+          # Capture the last 80 lines of output for the PR body.
+          tail -80 "$LOG" > /tmp/test_tail.log
+          echo "---- test tail ----"
+          cat /tmp/test_tail.log
+
       - name: Create implementation PR
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -128,6 +228,10 @@ jobs:
           SOURCE_ISSUE: ${{ steps.spec.outputs.source_issue }}
           TITLE: ${{ steps.spec.outputs.title }}
           SPEC_PR: ${{ steps.spec.outputs.spec_pr }}
+          SPEC_SHA: ${{ steps.spec.outputs.spec_sha }}
+          SPEC_SHORT_SHA: ${{ steps.spec.outputs.spec_short_sha }}
+          TEST_STATUS: ${{ steps.tests.outputs.status }}
+          TEST_CMD: ${{ steps.tests.outputs.cmd }}
           COMMENT_ID: ${{ github.event.comment.id }}
         run: |
           BRANCH="implement/issue-${ISSUE_NUMBER}"
@@ -168,18 +272,58 @@ jobs:
             exit 1
           fi
 
+          # Secrets guard: hard-fail if any staged file matches a dangerous name.
+          # .gitignore should have caught these, but defense in depth is cheap and a
+          # leaked master.key / .env can't be undone once pushed.
+          SECRET_PATTERNS='(^|/)(\.env|\.env\.[^/]*[^e]|config/master\.key|config/credentials/[^/]*\.key|.*\.pem|.*\.p12|id_rsa|id_dsa|id_ecdsa|id_ed25519|\.npmrc|\.netrc)$'
+          LEAKED=$(git diff --cached --name-only | grep -vE '\.env\.example$|\.env\.sample$' | grep -E "$SECRET_PATTERNS" || true)
+          if [ -n "$LEAKED" ]; then
+            echo "Error: refusing to commit files matching secret patterns:"
+            echo "$LEAKED"
+            if [ -n "$SOURCE_ISSUE" ]; then
+              {
+                echo "Implementation aborted: staged files match secret patterns and would leak if committed."
+                echo
+                echo '```'
+                echo "$LEAKED"
+                echo '```'
+                echo
+                echo "Fix \`.gitignore\` or remove these files and re-run with \`/agent implement\`."
+              } > /tmp/secrets_comment.md
+              gh issue comment "$SOURCE_ISSUE" --body-file /tmp/secrets_comment.md
+            fi
+            exit 1
+          fi
+
           # Sanity check: a runaway commit (usually a missing .gitignore after scaffolding —
           # node_modules, vendor/bundle, etc.) produces an unreviewable PR. Bail out so the
           # human can fix .gitignore and re-run with /agent implement.
           STAGED_COUNT=$(git diff --cached --name-only | wc -l | tr -d ' ')
           MAX_FILES="${AGENT_MAX_FILES:-600}"
           if [ "$STAGED_COUNT" -gt "$MAX_FILES" ]; then
+            BREAKDOWN=$(git diff --cached --name-only \
+              | awk -F/ '{ if (NF>1) print $1"/"; else print $1 }' \
+              | sort | uniq -c | sort -rn | head -15)
+
             echo "Error: $STAGED_COUNT staged files exceeds limit of $MAX_FILES."
             echo "This usually means .gitignore is missing entries (node_modules, vendor/bundle, dist, etc.)."
-            echo "First 30 offenders:"
-            git diff --cached --name-only | head -30
+            echo
+            echo "Top-level directory breakdown (file count):"
+            echo "$BREAKDOWN"
+
             if [ -n "$SOURCE_ISSUE" ]; then
-              gh issue comment "$SOURCE_ISSUE" --body "Implementation aborted: would commit ${STAGED_COUNT} files (limit ${MAX_FILES}). Likely a missing \`.gitignore\` after scaffolding. Fix the prompt or \`.gitignore\` expectations and re-run with \`/agent implement\`."
+              {
+                echo "Implementation aborted: would commit **${STAGED_COUNT}** files (limit ${MAX_FILES})."
+                echo
+                echo "Likely a missing \`.gitignore\` entry after scaffolding. Top-level directory breakdown:"
+                echo
+                echo '```'
+                echo "$BREAKDOWN"
+                echo '```'
+                echo
+                echo "Fix \`.gitignore\` (or the prompt) and re-run with \`/agent implement\`."
+              } > /tmp/abort_comment.md
+              gh issue comment "$SOURCE_ISSUE" --body-file /tmp/abort_comment.md
             fi
             exit 1
           fi
@@ -189,7 +333,7 @@ jobs:
 
           git commit -m "Implement: ${TITLE}
 
-          Based on spec ${SPEC_PR_REF}
+          Based on spec ${SPEC_PR_REF} (features/issue-${ISSUE_NUMBER}.md @ ${SPEC_SHORT_SHA})
           Source issue: #${SOURCE_ISSUE:-$ISSUE_NUMBER}"
           git push origin "$BRANCH"
 
@@ -198,18 +342,40 @@ jobs:
             ISSUE_REF="Resolves #${SOURCE_ISSUE}"
           fi
 
+          # Format the test status section for the PR body.
+          case "$TEST_STATUS" in
+            passed)  TEST_LINE="Tests: passed (\`${TEST_CMD}\`)" ;;
+            failed)  TEST_LINE="Tests: FAILED (\`${TEST_CMD}\`) — see test output section below" ;;
+            timeout) TEST_LINE="Tests: TIMEOUT after 10 minutes (\`${TEST_CMD}\`)" ;;
+            skipped|"") TEST_LINE="Tests: not run (no recognized test command)" ;;
+            *)       TEST_LINE="Tests: ${TEST_STATUS}" ;;
+          esac
+
+          TEST_OUTPUT_BLOCK=""
+          if [ -f /tmp/test_tail.log ] && [ "$TEST_STATUS" != "skipped" ] && [ "$TEST_STATUS" != "passed" ]; then
+            TEST_OUTPUT_BLOCK="
+
+          ### Test output (tail)
+
+          \`\`\`
+          $(cat /tmp/test_tail.log)
+          \`\`\`"
+          fi
+
           PR_BODY="## Implementation for: ${TITLE}
 
           This implementation was auto-generated by Agent Flow based on the approved spec.
 
           - Spec PR: ${SPEC_PR_REF}
-          - Spec file: \`features/issue-${ISSUE_NUMBER}.md\`
+          - Spec file: \`features/issue-${ISSUE_NUMBER}.md\` @ \`${SPEC_SHORT_SHA}\`
           - Source issue: #${SOURCE_ISSUE:-$ISSUE_NUMBER}
+          - ${TEST_LINE}
 
           ### How to review
           - Pull this branch locally to test: \`git checkout ${BRANCH}\`
-          - Review the changes against the spec
+          - Review the changes against the spec revision \`${SPEC_SHORT_SHA}\`
           - Continue development manually if needed (e.g., with Claude Code)
+          ${TEST_OUTPUT_BLOCK}
 
           ${ISSUE_REF}"
 
