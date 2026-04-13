@@ -1,5 +1,5 @@
 <div class="d-flex justify-content-between align-items-center mb-4">
-  <h1>My Tasks</h1>
+  <h1><%= current_user.email %>'s Tasks</h1>
   <%= link_to "New Task", new_task_path, class: "btn btn-success" %>
 </div>
 
@@ -43,11 +43,11 @@
           </div>
           
           <div class="card-footer bg-transparent">
-            <div class="btn-group w-100" role="group">
+            <div class="d-flex gap-2">
               <%= link_to "View", task_path(task), class: "btn btn-sm btn-outline-primary" %>
               <%= link_to "Edit", edit_task_path(task), class: "btn btn-sm btn-outline-secondary" %>
               <%= button_to "Delete", task_path(task), method: :delete,
-                          form: { data: { turbo_confirm: "Are you sure?" } },
+                          form: { data: { turbo_confirm: "Are you sure?" }, class: "d-inline" },
                           class: "btn btn-sm btn-outline-danger" %>
             </div>
           </div>

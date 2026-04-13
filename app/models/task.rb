@@ -1,4 +1,6 @@
 class Task < ApplicationRecord
+  belongs_to :user
+  
   validates :title, presence: true, length: { maximum: 255 }
   
   scope :completed, -> { where(completed: true) }
