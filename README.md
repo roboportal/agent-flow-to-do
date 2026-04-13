@@ -63,6 +63,8 @@ model: "claude-sonnet-4-20250514"
 7. **A draft implementation PR** is automatically created.
 8. **Review, test, and merge** the implementation (or pull the branch to continue development).
 
+To re-run the implementation phase (e.g., after tweaking `implement-prompt.md` or the workflow), post `/agent implement` on the original issue. The stale implementation branch and its draft PR are closed automatically before a fresh run.
+
 ## Configuration Reference
 
 | Key | Description | Default |
