@@ -12,13 +12,22 @@ flowchart TD
     D -->|"/agent regenerate"| C
     D -->|Approve + merge| E[Agent generates implementation PR]
     E --> F{Team reviews code}
+    F -->|"/agent implement (re-run)"| E
     F -->|Request changes| F
     F -->|Merge| A
 ```
 
 **Phase 1: Spec** — Someone posts `/agent proceed` on an issue. A GitHub Action runs Claude Code in the runner, passes it the issue thread, and lets it explore the repository with Read/Glob/Grep. Claude writes a spec file to `features/issue-{number}.md`, and the workflow opens a PR. The team reviews and comments. Posting `/agent regenerate` on the spec PR triggers a rerun with the review feedback as input. Approve and merge to move to phase 2.
 
-**Phase 2: Implementation** — Triggered automatically when a spec PR is merged. The workflow launches Claude Code again, pointing it at the approved spec. Claude reads the spec, explores the codebase, and edits files directly. The workflow commits the result and opens a draft PR. The team can pull the branch and continue work manually, or review and merge as-is.
+**Phase 2: Implementation** — Triggered automatically when a spec PR is merged, or manually by posting `/agent implement` on the source issue. The workflow:
+
+1. **Scaffold & implement** — Claude reads the spec, scaffolds the project if the repo is empty (`rails new`, `npm create vite@latest`, etc.), then implements the spec against the codebase.
+2. **`.gitignore` review** — a second focused Claude pass audits `.gitignore` and adds any missing entries (dependencies, build output, env files) before anything gets staged.
+3. **Run tests** — the workflow detects the stack (package.json, Gemfile, pyproject.toml, go.mod, Cargo.toml) and runs the canonical test command. Results are included in the PR body, but failures don't block PR creation.
+4. **Safety checks** — a secrets guard hard-fails if files matching dangerous names (`.env`, `*.key`, `*.pem`, etc.) would be committed, and a file-count sanity check aborts if the commit exceeds 600 files (typically a runaway `node_modules/` from a missing `.gitignore` entry).
+5. **Open draft PR** — the workflow commits, pushes, and opens a draft PR. The commit message and PR body include the spec revision SHA so reviewers can confirm which version of the spec was implemented.
+
+If something went wrong (bad implementation, stale prompt, test failures), post `/agent implement` on the source issue to re-run. The stale branch and draft PR are closed automatically before the fresh run starts.
 
 Both phases use [`anthropics/claude-code-base-action`](https://github.com/anthropics/claude-code-base-action), which runs the real Claude Code agentic loop in the runner — not a one-shot API call. This means Claude can iteratively explore the repo, read exactly the files it needs, and write output directly rather than producing a single text blob that has to be parsed.
 
@@ -60,10 +69,9 @@ model: "claude-sonnet-4-20250514"
 4. **Review the spec PR**. Leave comments on what to change.
 5. **Post `/agent regenerate`** on the spec PR to update it based on feedback.
 6. **Approve and merge** the spec PR when satisfied.
-7. **A draft implementation PR** is automatically created.
+7. **A draft implementation PR** is automatically created, with test results and the spec revision SHA in the body.
 8. **Review, test, and merge** the implementation (or pull the branch to continue development).
-
-To re-run the implementation phase (e.g., after tweaking `implement-prompt.md` or the workflow), post `/agent implement` on the original issue. The stale implementation branch and its draft PR are closed automatically before a fresh run.
+9. **Re-run implementation** by posting `/agent implement` on the original issue — useful after tweaking `implement-prompt.md` or the workflow. The stale branch and draft PR are cleaned up automatically.
 
 ## Configuration Reference
 
