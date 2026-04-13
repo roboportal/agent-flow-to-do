@@ -22,6 +22,9 @@ Add user registration and authentication to the to-do application with email/pas
 ### Authentication Strategy
 Use Rails' built-in `has_secure_password` with bcrypt gem for password hashing. Implement session-based authentication using Rails sessions rather than token-based authentication for simplicity.
 
+### Security Considerations
+Ensure CSRF protection is enabled for all authentication endpoints. Rails provides built-in CSRF protection via `protect_from_forgery` which should be verified in ApplicationController. All authentication forms must include CSRF tokens to prevent cross-site request forgery attacks.
+
 ### Data Model Changes
 Create a User model with email and password fields. Modify the Task model to belong to a User. Use email as the unique identifier for users.
 
@@ -49,7 +52,7 @@ Add authentication forms using Rails form helpers, integrate with existing Turbo
 | `db/migrate/xxx_add_user_to_tasks.rb` | Add user_id foreign key to tasks table |
 | `app/models/user.rb` | New User model with has_secure_password and has_many tasks |
 | `app/models/task.rb` | Add belongs_to user association |
-| `app/controllers/application_controller.rb` | Add authentication helper methods and error handling |
+| `app/controllers/application_controller.rb` | Add authentication helper methods, error handling, and verify CSRF protection is enabled |
 | `app/controllers/users_controller.rb` | New controller for user registration (new, create) |
 | `app/controllers/sessions_controller.rb` | New controller for authentication (new, create, destroy) |
 | `app/controllers/tasks_controller.rb` | Add authentication filters and scope tasks to current user |
@@ -76,4 +79,6 @@ None.
 - [ ] Application layout shows current user email when signed in
 - [ ] Application layout shows sign out link when authenticated
 - [ ] Database properly stores hashed passwords (not plain text)
+- [ ] CSRF protection is properly configured and authentication forms include CSRF tokens
+- [ ] All authentication endpoints are protected against CSRF attacks
 - [ ] All existing task functionality continues to work for authenticated users
